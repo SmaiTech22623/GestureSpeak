@@ -9,12 +9,12 @@ import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, Square, Upload, Info, CheckCircle, Hourglass, Bluetooth } from 'lucide-react';
+import { Play, Square, Upload, Info, CheckCircle, Hourglass, Bluetooth, SkipForward } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const GESTURES = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...'123456789', '10'];
-const SAMPLES_PER_GESTURE = 20; // Increased samples
-const DEMO_INTERVAL = 1000; // 1 second interval for demo
+const SAMPLES_PER_GESTURE = 20;
+const COLLECTION_INTERVAL = 20000; // 20 seconds
 
 // IMPORTANT: Replace with your actual Bluetooth Service and Characteristic UUIDs
 const GESTURE_SERVICE_UUID = '0000180d-0000-1000-8000-00805f9b34fb'; // Example: Heart Rate Service
@@ -55,6 +55,7 @@ export function DataCollector() {
   const [isConnected, setIsConnected] = useState(false);
   const [device, setDevice] = useState<BluetoothDevice | null>(null);
   const sensorCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+  const collectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const { toast } = useToast();
 
@@ -73,16 +74,22 @@ export function DataCollector() {
     setCurrentSample(0);
     setCollectedData({});
     setSessionComplete(false);
+    if (collectionTimeoutRef.current) {
+        clearTimeout(collectionTimeoutRef.current);
+    }
   };
 
   const handleDisconnect = () => {
     if (device && device.gatt?.connected) {
       device.gatt.disconnect();
     }
+  };
+
+  const onDisconnected = () => {
     setIsConnected(false);
     setDevice(null);
     setLiveData(null);
-    setIsCollecting(false);
+    setIsCollecting(false); // Stop collection if device disconnects
     toast({ title: 'Device Disconnected' });
   };
   
@@ -100,6 +107,7 @@ export function DataCollector() {
       toast({ title: "Requesting Bluetooth device..." });
       const newDevice = await navigator.bluetooth.requestDevice({
         filters: [{ services: [GESTURE_SERVICE_UUID] }],
+        // optionalServices: [GESTURE_SERVICE_UUID] // Use this if service is not primary
       });
 
       if (!newDevice.gatt) {
@@ -108,7 +116,7 @@ export function DataCollector() {
       }
 
       setDevice(newDevice);
-      newDevice.addEventListener('gattserverdisconnected', handleDisconnect);
+      newDevice.addEventListener('gattserverdisconnected', onDisconnected);
       
       const server = await newDevice.gatt.connect();
       const service = await server.getPrimaryService(GESTURE_SERVICE_UUID);
@@ -134,62 +142,71 @@ export function DataCollector() {
   const handleSensorData = (event: Event) => {
     const target = event.target as BluetoothRemoteGATTCharacteristic;
     const value = target.value;
-    if (!value) return;
-
+    if (!value || !isCollecting) return;
+  
     // NOTE: You'll need to parse the data from the device according to your Pi's data format.
     // This is a placeholder assuming a simple JSON string format for demonstration.
     try {
       const decoder = new TextDecoder('utf-8');
       const jsonString = decoder.decode(value);
       const data = JSON.parse(jsonString);
-
-      if (isCollecting) {
-        setLiveData({ ...data, gesture: currentGesture });
-
-        if (currentSample < SAMPLES_PER_GESTURE) {
-            const newSample: SensorData = { ...data, timestamp: Date.now() };
-
-            setCollectedData(prevData => {
-                const gestureData = prevData[currentGesture] || [];
-                return {
-                    ...prevData,
-                    [currentGesture]: [...gestureData, newSample]
-                };
-            });
-            setCurrentSample(s => s + 1);
-        }
-      }
+  
+      const newSample: SensorData = { ...data, timestamp: Date.now() };
+      setLiveData({ ...newSample, gesture: currentGesture });
+  
+      setCollectedData(prevData => {
+        const gestureData = prevData[currentGesture] || [];
+        return {
+          ...prevData,
+          [currentGesture]: [...gestureData, newSample]
+        };
+      });
+      setCurrentSample(s => s + 1); // This just counts samples, doesn't drive state
+  
     } catch(e) {
-        console.error("Failed to parse sensor data:", e);
+      // This can be noisy if the data stream isn't perfect JSON
+      // console.error("Failed to parse sensor data:", e);
     }
   };
-
-
-  useEffect(() => {
-    if (isCollecting && !isConnected) {
-      const interval = setInterval(() => {
-        setCurrentSample(s => s + 1);
-      }, DEMO_INTERVAL); // Simulate sample collection for demo
-      return () => clearInterval(interval);
-    }
-  }, [isCollecting, isConnected]);
   
-  useEffect(() => {
-    if (currentSample >= SAMPLES_PER_GESTURE) {
-      if (currentGestureIndex < GESTURES.length - 1) {
-        setCurrentGestureIndex(i => i + 1);
-        setCurrentSample(0);
-      } else {
-        setIsCollecting(false);
-        setSessionComplete(true);
-        toast({
-          title: "Collection Complete!",
-          description: `All ${GESTURES.length} gestures have been recorded.`,
-          className: "bg-green-100 border-green-400 text-green-800"
-        });
-      }
+  const advanceToNextGesture = useCallback(() => {
+    if (collectionTimeoutRef.current) {
+        clearTimeout(collectionTimeoutRef.current);
     }
-  }, [currentSample, currentGestureIndex, toast]);
+    
+    if (currentGestureIndex < GESTURES.length - 1) {
+      setCurrentGestureIndex(i => i + 1);
+      setCurrentSample(0);
+    } else {
+      setIsCollecting(false);
+      setSessionComplete(true);
+      toast({
+        title: "Collection Complete!",
+        description: `All ${GESTURES.length} gestures have been recorded.`,
+        className: "bg-green-100 border-green-400 text-green-800"
+      });
+    }
+  }, [currentGestureIndex, toast]);
+  
+
+  useEffect(() => {
+    if (isCollecting) {
+        // Set a timeout to advance to the next gesture
+        collectionTimeoutRef.current = setTimeout(advanceToNextGesture, COLLECTION_INTERVAL);
+    } else {
+        if (collectionTimeoutRef.current) {
+            clearTimeout(collectionTimeoutRef.current);
+        }
+    }
+
+    // Cleanup function to clear timeout if component unmounts or dependencies change
+    return () => {
+        if (collectionTimeoutRef.current) {
+            clearTimeout(collectionTimeoutRef.current);
+        }
+    };
+  }, [isCollecting, currentGestureIndex, advanceToNextGesture]);
+
 
   const handleUpload = async () => {
     if (!userId || Object.keys(collectedData).length === 0) {
@@ -232,20 +249,20 @@ export function DataCollector() {
   };
 
   const handleStartCollection = () => {
-    if (sessionComplete) {
-      resetSession();
-    }
+    resetSession(); // Ensure a clean start
     if (!isConnected) {
       toast({
         title: "No Device Connected",
-        description: "Running in demo mode. Data is not being saved.",
+        description: "Running in demo mode. Data is not being collected.",
         variant: "destructive",
       });
     }
     setIsCollecting(true);
   };
   
-  const totalProgress = ((currentGestureIndex * SAMPLES_PER_GESTURE + currentSample) / (GESTURES.length * SAMPLES_PER_GESTURE)) * 100;
+  const totalProgress = (currentGestureIndex / GESTURES.length) * 100;
+  const samplesForCurrentGesture = collectedData[currentGesture]?.length || 0;
+
 
   return (
     <Card className="w-full max-w-4xl shadow-2xl">
@@ -257,7 +274,7 @@ export function DataCollector() {
             </div>
             <div className="flex items-center gap-4">
               {userId && <p className="text-sm text-muted-foreground font-mono pt-1">UserID: {userId}</p>}
-              <Button variant={isConnected ? "secondary" : "default"} onClick={isConnected ? handleDisconnect : handleConnect}>
+              <Button variant={isConnected ? "secondary" : "default"} onClick={isConnected ? handleDisconnect : handleConnect} disabled={isCollecting}>
                   <Bluetooth className="mr-2 h-4 w-4" />
                   {isConnected ? `Disconnect` : 'Connect to Device'}
               </Button>
@@ -278,9 +295,8 @@ export function DataCollector() {
               <h3 className="text-7xl font-bold tracking-wider">{currentGesture}</h3>
             </div>
             <div className="flex items-center gap-4">
-              <span className="text-sm text-muted-foreground">Gesture Progress:</span>
-              <Progress value={(currentSample / SAMPLES_PER_GESTURE) * 100} className="w-full" />
-              <span className="text-sm font-mono">{currentSample} / {SAMPLES_PER_GESTURE}</span>
+              <span className="text-sm text-muted-foreground">Samples Recorded:</span>
+              <span className="text-sm font-mono">{samplesForCurrentGesture}</span>
             </div>
           </div>
         ) : (
@@ -288,7 +304,7 @@ export function DataCollector() {
              <Info className="h-4 w-4"/>
             <AlertTitle>Ready to Start?</AlertTitle>
             <AlertDescription>
-              Click the 'Start Collection' button to begin the data recording session. You will be prompted to perform each gesture multiple times.
+              Click the 'Start Collection' button to begin the data recording session. You will be prompted to perform each gesture.
             </AlertDescription>
           </Alert>
         )}
@@ -304,7 +320,7 @@ export function DataCollector() {
                 <h3 className="font-medium mb-2">Live Sensor Data</h3>
                 <Card className="h-64">
                     <CardContent className="p-4">
-                        {liveData ? (
+                        {liveData && isCollecting ? (
                             <div className="font-mono text-sm space-y-1">
                                 <p>Flex: [{liveData.flex1}, {liveData.flex2}, {liveData.flex3}, {liveData.flex4}, {liveData.flex5}]</p>
                                 <p>Accel: [ax: {liveData.imu.ax.toFixed(2)}, ay: {liveData.imu.ay.toFixed(2)}, az: {liveData.imu.az.toFixed(2)}]</p>
@@ -312,7 +328,7 @@ export function DataCollector() {
                             </div>
                         ) : (
                             <div className="flex items-center justify-center h-full text-muted-foreground">
-                                {isCollecting && !isConnected ? <p>Demo mode: No device connected</p> : isConnected ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Connect to a device to see live data</p>}
+                                {isCollecting && !isConnected ? <p>Demo mode: No live data</p> : isConnected ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Connect to a device to see live data</p>}
                             </div>
                         )}
                     </CardContent>
@@ -329,10 +345,10 @@ export function DataCollector() {
                             </TableRow>
                         </TableHeader>
                         <TableBody>
-                            {Object.entries(collectedData).map(([gesture, samples]) => (
-                                <TableRow key={gesture}>
+                            {GESTURES.map((gesture) => (
+                                <TableRow key={gesture} className={gesture === currentGesture && isCollecting ? "bg-accent/50" : ""}>
                                     <TableCell className="font-medium">{gesture}</TableCell>
-                                    <TableCell>{samples.length}</TableCell>
+                                    <TableCell>{collectedData[gesture]?.length || 0}</TableCell>
                                 </TableRow>
                             ))}
                         </TableBody>
@@ -343,18 +359,26 @@ export function DataCollector() {
 
       </CardContent>
       <CardFooter className="flex justify-between items-center">
-        {!isCollecting ? (
-             <Button size="lg" onClick={handleStartCollection} disabled={isUploading}>
-                <Play className="mr-2 h-5 w-5"/>
-                {sessionComplete ? "Start New Session" : "Start Collection"}
-            </Button>
-        ) : (
-            <Button size="lg" variant="destructive" onClick={() => setIsCollecting(false)}>
-                <Square className="mr-2 h-5 w-5"/>
-                Stop Collection
-            </Button>
-        )}
-        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || Object.keys(collectedData).length === 0}>
+        <div className="flex gap-4">
+            {!isCollecting ? (
+                <Button size="lg" onClick={handleStartCollection} disabled={isUploading}>
+                    <Play className="mr-2 h-5 w-5"/>
+                    {sessionComplete ? "Start New Session" : "Start Collection"}
+                </Button>
+            ) : (
+                <>
+                <Button size="lg" variant="destructive" onClick={() => setIsCollecting(false)}>
+                    <Square className="mr-2 h-5 w-5"/>
+                    Stop
+                </Button>
+                <Button size="lg" variant="secondary" onClick={advanceToNextGesture}>
+                    <SkipForward className="mr-2 h-5 w-5"/>
+                    Next Gesture
+                </Button>
+                </>
+            )}
+        </div>
+        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || isCollecting || Object.keys(collectedData).length === 0}>
             {isUploading ? <Hourglass className="mr-2 h-5 w-5 animate-spin"/> : <Upload className="mr-2 h-5 w-5"/>}
             Upload Data
         </Button>
