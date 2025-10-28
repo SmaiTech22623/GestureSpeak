@@ -199,7 +199,7 @@ useEffect(() => {
             <AlertTitle>Ready to Start?</AlertTitle>
             <AlertDescription>
               Click the "Start Collection" button to begin the data recording session. You will be prompted to perform each gesture multiple times.
-            </Dateless>
+            </AlertDescription>
           </Alert>
         )}
 
