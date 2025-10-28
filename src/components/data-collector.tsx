@@ -51,9 +51,11 @@ export function DataCollector() {
 
   useEffect(() => {
     // A real app would use Firebase Auth to get a UID.
-    // For this demo, we'll generate a simple one.
-    const newUserId = `user${Math.floor(1000 + Math.random() * 9000)}`;
-    setUserId(newUserId);
+    // For this demo, we'll generate a simple one on the client.
+    if (typeof window !== 'undefined') {
+        const newUserId = `user${Math.floor(1000 + Math.random() * 9000)}`;
+        setUserId(newUserId);
+    }
   }, []);
 
   const currentGesture = GESTURES[currentGestureIndex];
