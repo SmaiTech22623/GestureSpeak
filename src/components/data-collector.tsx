@@ -165,6 +165,15 @@ export function DataCollector() {
 
 
   useEffect(() => {
+    if (isCollecting && !isConnected) {
+      const interval = setInterval(() => {
+        setCurrentSample(s => s + 1);
+      }, 500); // Simulate sample collection every 500ms for demo
+      return () => clearInterval(interval);
+    }
+  }, [isCollecting, isConnected]);
+  
+  useEffect(() => {
     if (currentSample >= SAMPLES_PER_GESTURE) {
       if (currentGestureIndex < GESTURES.length - 1) {
         setCurrentGestureIndex(i => i + 1);
@@ -220,6 +229,20 @@ export function DataCollector() {
       setIsUploading(false);
     }
   };
+
+  const handleStartCollection = () => {
+    if (sessionComplete) {
+      resetSession();
+    }
+    if (!isConnected) {
+      toast({
+        title: "No Device Connected",
+        description: "Running in demo mode. Data is not being saved.",
+        variant: "destructive",
+      });
+    }
+    setIsCollecting(true);
+  };
   
   const totalProgress = ((currentGestureIndex * SAMPLES_PER_GESTURE + currentSample) / (GESTURES.length * SAMPLES_PER_GESTURE)) * 100;
 
@@ -264,7 +287,7 @@ export function DataCollector() {
              <Info className="h-4 w-4"/>
             <AlertTitle>Ready to Start?</AlertTitle>
             <AlertDescription>
-              {isConnected ? "Click the 'Start Collection' button to begin the data recording session. You will be prompted to perform each gesture multiple times." : "Connect to your Bluetooth device to begin."}
+              Click the 'Start Collection' button to begin the data recording session. You will be prompted to perform each gesture multiple times.
             </AlertDescription>
           </Alert>
         )}
@@ -288,7 +311,7 @@ export function DataCollector() {
                             </div>
                         ) : (
                             <div className="flex items-center justify-center h-full text-muted-foreground">
-                                {isConnected ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Connect to a device to see live data</p>}
+                                {isCollecting && !isConnected ? <p>Demo mode: No device connected</p> : isConnected ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Connect to a device to see live data</p>}
                             </div>
                         )}
                     </CardContent>
@@ -320,7 +343,7 @@ export function DataCollector() {
       </CardContent>
       <CardFooter className="flex justify-between items-center">
         {!isCollecting ? (
-             <Button size="lg" onClick={() => { if(sessionComplete) resetSession(); setIsCollecting(true); }} disabled={isUploading || !isConnected}>
+             <Button size="lg" onClick={handleStartCollection} disabled={isUploading}>
                 <Play className="mr-2 h-5 w-5"/>
                 {sessionComplete ? "Start New Session" : "Start Collection"}
             </Button>
@@ -330,7 +353,7 @@ export function DataCollector() {
                 Stop Collection
             </Button>
         )}
-        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || Object.keys(collectedData).length === 0}>
+        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || Object.keys(collectedData).length === 0 || !isConnected}>
             {isUploading ? <Hourglass className="mr-2 h-5 w-5 animate-spin"/> : <Upload className="mr-2 h-5 w-5"/>}
             Upload Data
         </Button>
