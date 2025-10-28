@@ -13,7 +13,8 @@ import { Play, Square, Upload, Info, CheckCircle, Hourglass, Bluetooth } from 'l
 import { useToast } from '@/hooks/use-toast';
 
 const GESTURES = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...'123456789', '10'];
-const SAMPLES_PER_GESTURE = 5;
+const SAMPLES_PER_GESTURE = 20; // Increased samples
+const DEMO_INTERVAL = 1000; // 1 second interval for demo
 
 // IMPORTANT: Replace with your actual Bluetooth Service and Characteristic UUIDs
 const GESTURE_SERVICE_UUID = '0000180d-0000-1000-8000-00805f9b34fb'; // Example: Heart Rate Service
@@ -168,7 +169,7 @@ export function DataCollector() {
     if (isCollecting && !isConnected) {
       const interval = setInterval(() => {
         setCurrentSample(s => s + 1);
-      }, 500); // Simulate sample collection every 500ms for demo
+      }, DEMO_INTERVAL); // Simulate sample collection for demo
       return () => clearInterval(interval);
     }
   }, [isCollecting, isConnected]);
@@ -353,7 +354,7 @@ export function DataCollector() {
                 Stop Collection
             </Button>
         )}
-        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || Object.keys(collectedData).length === 0 || !isConnected}>
+        <Button size="lg" variant="outline" onClick={handleUpload} disabled={isUploading || Object.keys(collectedData).length === 0}>
             {isUploading ? <Hourglass className="mr-2 h-5 w-5 animate-spin"/> : <Upload className="mr-2 h-5 w-5"/>}
             Upload Data
         </Button>
