@@ -1,19 +1,23 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/lib/firebase';
-import { ref, onValue, off, push, set, serverTimestamp } from 'firebase/database';
+import { ref, push, set, serverTimestamp } from 'firebase/database';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Play, Square, Upload, Info, CheckCircle, Hourglass } from 'lucide-react';
+import { Play, Square, Upload, Info, CheckCircle, Hourglass, Bluetooth } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const GESTURES = [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ', ...'123456789', '10'];
 const SAMPLES_PER_GESTURE = 5;
+
+// IMPORTANT: Replace with your actual Bluetooth Service and Characteristic UUIDs
+const GESTURE_SERVICE_UUID = '0000180d-0000-1000-8000-00805f9b34fb'; // Example: Heart Rate Service
+const SENSOR_DATA_CHARACTERISTIC_UUID = '00002a37-0000-1000-8000-00805f9b34fb'; // Example: Heart Rate Measurement
 
 type SensorData = {
   flex1: number;
@@ -47,16 +51,18 @@ export function DataCollector() {
   const [liveData, setLiveData] = useState<LiveData | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [sessionComplete, setSessionComplete] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [device, setDevice] = useState<BluetoothDevice | null>(null);
+  const sensorCharacteristicRef = useRef<BluetoothRemoteGATTCharacteristic | null>(null);
+
   const { toast } = useToast();
 
   useEffect(() => {
-    // A real app would use Firebase Auth to get a UID.
-    // For this demo, we'll generate a simple one on the client.
-    if (typeof window !== 'undefined') {
-        const newUserId = `user${Math.floor(1000 + Math.random() * 9000)}`;
-        setUserId(newUserId);
+    if (typeof window !== 'undefined' && !userId) {
+      const newUserId = `user${Math.floor(1000 + Math.random() * 9000)}`;
+      setUserId(newUserId);
     }
-  }, []);
+  }, [userId]);
 
   const currentGesture = GESTURES[currentGestureIndex];
 
@@ -68,11 +74,75 @@ export function DataCollector() {
     setSessionComplete(false);
   };
 
-  const handleDataSnapshot = useCallback((snapshot: any) => {
-    if (!isCollecting) return;
+  const handleDisconnect = () => {
+    if (device && device.gatt?.connected) {
+      device.gatt.disconnect();
+    }
+    setIsConnected(false);
+    setDevice(null);
+    setLiveData(null);
+    setIsCollecting(false);
+    toast({ title: 'Device Disconnected' });
+  };
+  
+  const handleConnect = async () => {
+    if (!navigator.bluetooth) {
+      toast({
+        title: "Web Bluetooth not supported",
+        description: "Your browser doesn't support the Web Bluetooth API.",
+        variant: "destructive",
+      });
+      return;
+    }
 
-    const data = snapshot.val();
-    if (data) {
+    try {
+      toast({ title: "Requesting Bluetooth device..." });
+      const newDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [GESTURE_SERVICE_UUID] }],
+      });
+
+      if (!newDevice.gatt) {
+        toast({ title: 'GATT Server not available', variant: 'destructive' });
+        return;
+      }
+
+      setDevice(newDevice);
+      newDevice.addEventListener('gattserverdisconnected', handleDisconnect);
+      
+      const server = await newDevice.gatt.connect();
+      const service = await server.getPrimaryService(GESTURE_SERVICE_UUID);
+      const characteristic = await service.getCharacteristic(SENSOR_DATA_CHARACTERISTIC_UUID);
+
+      sensorCharacteristicRef.current = characteristic;
+      await characteristic.startNotifications();
+      characteristic.addEventListener('characteristicvaluechanged', handleSensorData);
+
+      setIsConnected(true);
+      toast({ title: `Connected to ${newDevice.name || 'device'}` });
+
+    } catch (error: any) {
+      console.error("Bluetooth connection error:", error);
+      toast({
+        title: "Connection Failed",
+        description: error.message || "Could not connect to the device.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleSensorData = (event: Event) => {
+    const target = event.target as BluetoothRemoteGATTCharacteristic;
+    const value = target.value;
+    if (!value) return;
+
+    // NOTE: You'll need to parse the data from the device according to your Pi's data format.
+    // This is a placeholder assuming a simple JSON string format for demonstration.
+    try {
+      const decoder = new TextDecoder('utf-8');
+      const jsonString = decoder.decode(value);
+      const data = JSON.parse(jsonString);
+
+      if (isCollecting) {
         setLiveData({ ...data, gesture: currentGesture });
 
         if (currentSample < SAMPLES_PER_GESTURE) {
@@ -85,24 +155,13 @@ export function DataCollector() {
                     [currentGesture]: [...gestureData, newSample]
                 };
             });
-
             setCurrentSample(s => s + 1);
         }
+      }
+    } catch(e) {
+        console.error("Failed to parse sensor data:", e);
     }
-}, [isCollecting, currentGesture, currentSample]);
-
-useEffect(() => {
-    if (isCollecting) {
-        // This simulates capturing one sample. A real implementation might
-        // stream data and have a button to "capture" a sample.
-        const sensorDataRef = ref(db, 'live/sensor_data');
-        onValue(sensorDataRef, handleDataSnapshot);
-
-        return () => {
-            off(sensorDataRef, 'value', handleDataSnapshot);
-        };
-    }
-}, [isCollecting, handleDataSnapshot]);
+  };
 
 
   useEffect(() => {
@@ -137,7 +196,6 @@ useEffect(() => {
       const userGesturesRef = ref(db, `users/${userId}/gestures`);
       await set(userGesturesRef, collectedData);
 
-      // Log the upload event
       const uploadsRef = ref(db, `uploads_log`);
       await push(uploadsRef, {
           userId: userId,
@@ -173,7 +231,13 @@ useEffect(() => {
                 <CardTitle className="font-headline text-3xl">Gesture Data Collection</CardTitle>
                 <CardDescription>Follow the prompts to record gesture data for the AI model.</CardDescription>
             </div>
-            {userId && <p className="text-sm text-muted-foreground font-mono pt-1">UserID: {userId}</p>}
+            <div className="flex items-center gap-4">
+              {userId && <p className="text-sm text-muted-foreground font-mono pt-1">UserID: {userId}</p>}
+              <Button variant={isConnected ? "secondary" : "default"} onClick={isConnected ? handleDisconnect : handleConnect}>
+                  <Bluetooth className="mr-2 h-4 w-4" />
+                  {isConnected ? `Disconnect` : 'Connect to Device'}
+              </Button>
+            </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -200,7 +264,7 @@ useEffect(() => {
              <Info className="h-4 w-4"/>
             <AlertTitle>Ready to Start?</AlertTitle>
             <AlertDescription>
-              Click the "Start Collection" button to begin the data recording session. You will be prompted to perform each gesture multiple times.
+              {isConnected ? "Click the 'Start Collection' button to begin the data recording session. You will be prompted to perform each gesture multiple times." : "Connect to your Bluetooth device to begin."}
             </AlertDescription>
           </Alert>
         )}
@@ -224,7 +288,7 @@ useEffect(() => {
                             </div>
                         ) : (
                             <div className="flex items-center justify-center h-full text-muted-foreground">
-                                {isCollecting ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Start collection to see live data</p>}
+                                {isConnected ? <><Hourglass className="mr-2 h-4 w-4 animate-spin"/>Waiting for data...</> : <p>Connect to a device to see live data</p>}
                             </div>
                         )}
                     </CardContent>
@@ -256,7 +320,7 @@ useEffect(() => {
       </CardContent>
       <CardFooter className="flex justify-between items-center">
         {!isCollecting ? (
-             <Button size="lg" onClick={() => { if(sessionComplete) resetSession(); setIsCollecting(true); }} disabled={isUploading}>
+             <Button size="lg" onClick={() => { if(sessionComplete) resetSession(); setIsCollecting(true); }} disabled={isUploading || !isConnected}>
                 <Play className="mr-2 h-5 w-5"/>
                 {sessionComplete ? "Start New Session" : "Start Collection"}
             </Button>
