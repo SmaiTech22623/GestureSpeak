@@ -5,13 +5,13 @@ import { getDatabase } from "firebase/database";
 // Please fill in your Firebase project configuration here.
 // You can find this in your Firebase project settings.
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  databaseURL: "YOUR_DATABASE_URL",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  "apiKey": "AIzaSyCEXbzrzoS6xaGV3Nirom7p0xs3WtLvXPA",
+  "authDomain": "studio-6011348590-68ee1.firebaseapp.com",
+  "databaseURL": "https://studio-6011348590-68ee1.firebaseio.com",
+  "projectId": "studio-6011348590-68ee1",
+  "storageBucket": "studio-6011348590-68ee1.appspot.com",
+  "messagingSenderId": "646238283731",
+  "appId": "1:646238283731:web:e0da559c40a8880d22b126"
 };
 
 /**
